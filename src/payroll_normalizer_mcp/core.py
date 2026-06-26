@@ -53,13 +53,18 @@ STATUS_MAP = [
 ]
 
 
-def map_status(raw):
-    """把原表「状态」值映射为标准身份类型；命中返回(身份类型, 原值)，未命中返回(None, 原值)。"""
+def map_status(raw, extra=None):
+    """把原表「状态」值映射为标准身份类型。
+    extra: 可选 [(关键字, 身份类型)] 或 {关键字: 身份类型}，按公司补充的自定义词表，优先于内置 STATUS_MAP。
+    命中返回(身份类型, 原值)，未命中返回(None, 原值)。"""
     if raw is None:
         return None, ''
     s = str(raw).strip()
-    for kw, st in STATUS_MAP:
-        if kw in s:
+    if not s:
+        return None, ''
+    pairs = list(extra.items()) if isinstance(extra, dict) else (list(extra) if extra else [])
+    for kw, st in pairs + STATUS_MAP:
+        if kw and kw in s and st in STYPES:
             return st, s
     return None, s
 COLS = ['工号/唯一标识', '姓名', '所属主体', '所属年月', '应发工资(税前合计)',
@@ -229,9 +234,13 @@ def _resolve_overrides(header, ov):
 
 def normalize(folder, output_dir=None, overrides=None):
     """整理文件夹内所有工资表为标准模板 + 报告。
-    overrides: { 文件名: { 'entity': str, 'ym': 'YYYY-MM', 'column_map': {字段: 表头串或列号} } }
-    返回 dict（含产出路径、行数、口径分布、需人工项、报告 markdown）。"""
+    overrides: { 文件名: { 'entity': str, 'ym': 'YYYY-MM', 'column_map': {字段: 表头串或列号},
+                          'status_map': {状态原值关键字: 标准身份类型} } }
+      另支持全局键 '__status_map__': {关键字: 身份类型}，对所有文件生效（各公司状态写法不一时补词表用）。
+      身份类型须取自 STYPES；status_map 优先于内置关键字表。
+    返回 dict（含产出路径、行数、口径分布、需人工项、未识别状态值、报告 markdown）。"""
     overrides = overrides or {}
+    global_status_map = overrides.get('__status_map__', {}) or {}
     output_dir = output_dir or folder
     files = list_files(folder)
     if not files:
@@ -241,14 +250,16 @@ def normalize(folder, output_dir=None, overrides=None):
     id_sources, no_id = set(), []
     gross_methods, empty_gross = defaultdict(int), {}
     need_manual = []
-    stype_source = defaultdict(int)          # 身份类型来源：状态列推断 / 身份类型列 / 默认
+    stype_source = defaultdict(int)          # 身份类型来源：状态列推断 / 身份类型列 / 默认(无状态/离职待定/状态未识别)
     status_persons = defaultdict(set)        # 标准身份类型 -> {姓名} （由状态推断而来，供人工复核）
     left_persons = set()                     # 状态=离职，无法判定身份，需人工确认
+    unknown_status = defaultdict(set)        # 未识别的状态原值 -> {姓名}（已暂按全日制正式，绝不静默，待补 status_map）
     report.append(f"# 工资表整理报告\n\n输入: `{folder}`  共 {len(files)} 个文件\n")
 
     for path in files:
         fn = os.path.basename(path)
         ov = overrides.get(fn, {})
+        smap = {**global_status_map, **(ov.get('status_map') or {})}   # 全局词表 + 本文件词表
         header, rows, err = read_rows(path)
         if header is None:
             report.append(f"- ⚠️ `{fn}`：{err}，**已跳过（建议 AI 读取此文件并用 overrides 映射）**。")
@@ -295,16 +306,21 @@ def normalize(folder, output_dir=None, overrides=None):
                 stype_source['身份类型列'] += 1
             else:
                 raw_status = cell(idx.get('status'))
-                mapped, raw_s = map_status(raw_status)
+                mapped, raw_s = map_status(raw_status, smap)
                 if mapped:
                     stype = mapped
                     stype_source['状态列推断'] += 1
                     status_persons[mapped].add(name)
                 else:
-                    stype = '全日制正式'
-                    stype_source['默认'] += 1
-                    if raw_s and ('离职' in raw_s):
+                    stype = '全日制正式'   # 兜底，但下面会分类标注，不静默
+                    if not raw_s:
+                        stype_source['默认(无状态列/空)'] += 1
+                    elif '离职' in raw_s:
+                        stype_source['默认(离职待定)'] += 1
                         left_persons.add(name)
+                    else:
+                        stype_source['默认(状态未识别)'] += 1
+                        unknown_status[raw_s].add(name)
             gp = ''
             if cell(idx.get('gjj_paid')) not in (None, ''):
                 gp = '是' if str(cell(idx.get('gjj_paid'))).strip() in ('是', 'Y', 'y', '1', 'TRUE', 'true', '缴') else '否'
@@ -357,6 +373,14 @@ def normalize(folder, output_dir=None, overrides=None):
     if left_persons:
         report.append(f"- ⚠️ **状态=离职，身份类型待人工确认**（{len(left_persons)}人，已暂按全日制正式）："
                       f"{'、'.join(sorted(left_persons))} —— 离职是用工生命周期、非身份类型，请按其在职期间实际身份(正式/试用)修正。")
+    if unknown_status:
+        report.append("\n## 🚨 未识别的「状态」值（已暂按全日制正式，**绝非静默**，请补 status_map）")
+        report.append("各公司状态写法不一，下列值内置词表认不出。判断其对应身份类型后，重跑 `normalize_payroll` 并传 "
+                      "`overrides`：全局用 `\"__status_map__\": {\"原值\": \"标准身份类型\"}`，或按文件用 `\"文件名\": {\"status_map\": {...}}`。")
+        for val in sorted(unknown_status):
+            ppl = sorted(unknown_status[val])
+            report.append(f"- 状态「**{val}**」（{len(ppl)}人）：{'、'.join(ppl[:20])}{'…' if len(ppl) > 20 else ''}")
+        report.append(f"  可选标准身份类型：{' / '.join(STYPES)}")
     report.append("\n## ⚠️ 需人工确认")
     report.append("- **身份类型**：在校实习生等无法从「状态」列识别，请按实际核对；状态列缺失的仍默认「全日制正式」。")
     report.append("- **唯一标识**：若用工号，请确认同一人在不同主体的工号一致（不一致会把迁移的同一人拆成两人，建议改用身份证）。")
@@ -381,6 +405,8 @@ def normalize(folder, output_dir=None, overrides=None):
         'gross_methods': dict(gross_methods),
         'need_manual': [{'file': fn, 'reason': why} for fn, why in need_manual],
         'no_id_count': len(no_id),
+        'stype_source': dict(stype_source),
+        'unknown_status': {val: sorted(names) for val, names in sorted(unknown_status.items())},
         'report_markdown': '\n'.join(report),
     }
 

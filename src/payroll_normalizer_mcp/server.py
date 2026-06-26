@@ -58,9 +58,17 @@ def normalize_payroll(folder: str, output_dir: Optional[str] = None, overrides_j
         {"某文件.xlsx": {"entity": "甲公司", "ym": "2025-03",
                          "column_map": {"name": "员工", "gross": "税前总额", "id": 0}}}
       column_map 的值可为"表头文字"或列序号(从0起)；字段名取标准字段：
-      name/id/entity/ym/gross/total/unit_ss/net/stype/gjj_paid/gjj_base/gjj_ratio。
+      name/id/entity/ym/gross/total/unit_ss/net/status/stype/gjj_paid/gjj_base/gjj_ratio。
 
-    返回 JSON：产出路径、记录数、应发口径分布、需人工接管的文件清单、报告 markdown。
+      身份类型由原表「状态」列自动推断(试用→试用期、外包→劳务外包、正式→全日制正式等)。
+      各公司状态写法不一时,内置词表认不出的值会进报告/返回的 unknown_status,不会静默默认。
+      补充自定义状态词表(优先于内置)：
+        全局生效: {"__status_map__": {"转正": "全日制正式", "顾问": "劳务外包"}}
+        按文件:   {"某文件.xlsx": {"status_map": {"特聘": "退休返聘"}}}
+      身份类型须取自 standard_columns 的 staff_types。
+
+    返回 JSON：产出路径、记录数、应发口径分布、身份类型来源(stype_source)、
+      未识别状态值(unknown_status)、需人工接管的文件清单、报告 markdown。
     """
     try:
         overrides = json.loads(overrides_json) if overrides_json else None
