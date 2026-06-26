@@ -1,6 +1,6 @@
 [project]
 name = "payroll-normalizer-mcp"
-version = "1.3.0"
+version = "1.4.0"
 description = "MCP server: 让任意 AI 工具自动把工资表整理成社保测算标准模板"
 readme = "README.md"
 requires-python = ">=3.10"
