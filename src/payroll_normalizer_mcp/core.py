@@ -357,8 +357,9 @@ def normalize(folder, output_dir=None, overrides=None):
         flag = ' ⚠️应发待核' if gmethod.startswith('组件求和') or file_empty else ''
         report.append(f"- ✅ `{fn}`：{cnt} 行 | 主体「{ov.get('entity') or infer_entity(path, idx, rows[0] if rows else [])}」 | 应发口径：{gmethod}{flag} | ID列：{header[idx['id']] if 'id' in idx else '无(用姓名兜底)'}")
 
-    # 排序：按自然人(姓名)→主体→年月归并；年月为 YYYY-MM 零填充，字符串升序即按时间。空年月排末尾。
-    records.sort(key=lambda x: (str(x[1]), str(x[2]), (x[3] in (None, ''), str(x[3]))))
+    # 排序：时间优先（年月→主体→姓名），保证 2025 全部排在 2026 前面。
+    # 年月为 YYYY-MM 零填充，字符串升序即时间序；空年月排末尾。
+    records.sort(key=lambda x: ((x[3] in (None, ''), str(x[3])), str(x[2]), str(x[1])))
 
     os.makedirs(output_dir, exist_ok=True)
     out_xlsx = os.path.join(output_dir, '社保测算标准模板_整理结果.xlsx')
