@@ -1,0 +1,22 @@
+[project]
+name = "payroll-normalizer-mcp"
+version = "1.0.0"
+description = "MCP server: 让任意 AI 工具自动把工资表整理成社保测算标准模板"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "勾勾" }]
+dependencies = [
+    "mcp>=1.2.0",
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+payroll-normalizer-mcp = "payroll_normalizer_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/payroll_normalizer_mcp"]
